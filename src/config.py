@@ -45,6 +45,12 @@ class Settings:
     mongodb_server_selection_timeout_ms: int = int(
         _env("MONGODB_SERVER_SELECTION_TIMEOUT_MS", "2500")
     )
+    mongodb_connect_timeout_ms: int = int(
+        _env("MONGODB_CONNECT_TIMEOUT_MS", "10000")
+    )
+    mongodb_socket_timeout_ms: int = int(
+        _env("MONGODB_SOCKET_TIMEOUT_MS", "10000")
+    )
 
     dataset_dir: Path = BASE_DIR / _env("DATASET_DIR", "dataset")
     models_dir: Path = BASE_DIR / _env("MODELS_DIR", "models_saved")
