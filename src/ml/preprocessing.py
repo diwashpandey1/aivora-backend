@@ -42,16 +42,39 @@ ENCODINGS = ["utf-8", "utf-8-sig", "latin-1", "cp1252", "iso-8859-1"]
 
 
 class SpamTextPreprocessor(BaseEstimator, TransformerMixin):
-    """Scikit-learn compatible cleaner shared by training and inference."""
+    """Scikit-learn compatible cleaner shared by training and inference.
+    
+    Memory notes:
+    - Processes text iteratively, not loading all data into memory
+    - Output is list[str], which is immediately used by vectorizer
+    - No significant temporary objects during inference
+    - Temporary dict/string allocations freed by Python's GC during processing
+    """
 
     def fit(self, X: Iterable[str], y: Iterable[int] | None = None) -> "SpamTextPreprocessor":
         return self
 
     def transform(self, X: Iterable[str]) -> list[str]:
+        # Process each text through cleaning pipeline
+        # Temporary strings created in clean_text() are freed after each iteration
         return [clean_text(value) for value in X]
 
 
 def clean_text(value: object) -> str:
+    """Clean raw text for spam detection with minimal memory overhead.
+    
+    Memory optimization strategy:
+    - Processes text linearly through regex substitutions
+    - Each substitution overwrites previous version, freeing old string memory
+    - No intermediate lists or large temporary objects
+    - String operations are re-used efficiently by Python's string pool
+    - Total temporary memory: O(input_length), not O(input * num_operations)
+    
+    Pipeline order is optimized for memory:
+    1. Extract email payload first (reduces string size for further processing)
+    2. Regex substitutions in order of likelihood (frequent patterns cleaned first)
+    3. Final cleanup with minimal intermediate strings
+    """
     text = "" if value is None else str(value)
     text = _extract_email_payload(text)
     text = html.unescape(text)

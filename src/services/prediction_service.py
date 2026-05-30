@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import math
 from collections import Counter
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ import numpy as np
 from src.config import settings
 from src.ml.type_detection import TypeDetector
 from src.utils.logger import get_logger
+from src.utils.memory import memory_monitor
 
 
 SPAM_KEYWORDS = {
@@ -66,44 +68,66 @@ class PredictionService:
             except ModelNotReadyError as exc:
                 logger.warning("Model warmup skipped for %s: %s", detected_type, exc)
 
-    def analyze(self, text: str) -> dict[str, Any]:
-        detected_type = self._type_detector.detect(text)
-        bundle = self._load_bundle(detected_type)
+    def analyze(self, text: str, client_id: str | None = None) -> dict[str, Any]:
+        # Log memory before prediction to detect allocation issues
+        memory_before = memory_monitor.log_before_prediction(client_id)
+        
+        try:
+            detected_type = self._type_detector.detect(text)
+            bundle = self._load_bundle(detected_type)
 
-        preprocessor = bundle["preprocessor"]
-        vectorizer = bundle["vectorizer"]
-        model = bundle["model"]
+            preprocessor = bundle["preprocessor"]
+            vectorizer = bundle["vectorizer"]
+            model = bundle["model"]
 
-        cleaned = preprocessor.transform([text])
-        features = vectorizer.transform(cleaned)
+            # Transform input text to features
+            # cleaned is a list[str] - keep reference for cleanup
+            cleaned = preprocessor.transform([text])
+            # features is a sparse matrix - will be referenced by inference functions
+            features = vectorizer.transform(cleaned)
 
-        spam_probability = self._spam_probability(model, features)
-        safe_probability = 1 - spam_probability
-        prediction = "spam" if spam_probability >= 0.5 else "safe"
-        confidence = round(max(spam_probability, safe_probability) * 100, 2)
-        keywords = self._extract_keywords(cleaned[0], vectorizer, features, model)
-        risk_level = self._risk_level(spam_probability)
+            spam_probability = self._spam_probability(model, features)
+            safe_probability = 1 - spam_probability
+            prediction = "spam" if spam_probability >= 0.5 else "safe"
+            confidence = round(max(spam_probability, safe_probability) * 100, 2)
+            keywords = self._extract_keywords(cleaned[0], vectorizer, features, model)
+            risk_level = self._risk_level(spam_probability)
 
-        return {
-            "detected_type": detected_type,
-            "prediction": prediction,
-            "confidence": confidence,
-            "spam_probability": round(spam_probability, 4),
-            "safe_probability": round(safe_probability, 4),
-            "keywords_detected": keywords,
-            "risk_level": risk_level,
-            "chart_data": {
-                "spam_score": round(spam_probability * 100),
-                "safe_score": round(safe_probability * 100),
-            },
-            "analytics": self._analytics_payload(
-                prediction=prediction,
-                confidence=confidence,
-                spam_probability=spam_probability,
-                detected_type=detected_type,
-                keywords=keywords,
-            ),
-        }
+            result = {
+                "detected_type": detected_type,
+                "prediction": prediction,
+                "confidence": confidence,
+                "spam_probability": round(spam_probability, 4),
+                "safe_probability": round(safe_probability, 4),
+                "keywords_detected": keywords,
+                "risk_level": risk_level,
+                "chart_data": {
+                    "spam_score": round(spam_probability * 100),
+                    "safe_score": round(safe_probability * 100),
+                },
+                "analytics": self._analytics_payload(
+                    prediction=prediction,
+                    confidence=confidence,
+                    spam_probability=spam_probability,
+                    detected_type=detected_type,
+                    keywords=keywords,
+                ),
+            }
+            
+            # Explicitly clean up large temporary objects
+            # cleaned[0] is still used in _extract_keywords (already computed)
+            # Now we can safely clear references to large arrays/matrices
+            del cleaned  # list[str] - minimal but still clean up
+            del features  # sparse matrix - can be significant memory
+            
+            return result
+        finally:
+            # Always log memory after prediction and perform garbage collection
+            # This ensures temporary objects are freed even if an exception occurs
+            memory_monitor.log_after_prediction(client_id, memory_before)
+            # Force garbage collection to free all unreferenced objects from inference
+            # Including: numpy arrays, sparse matrices, intermediate computations
+            gc.collect()
 
     def _load_bundle(self, detected_type: str) -> dict[str, Any]:
         if detected_type in self._bundles:
