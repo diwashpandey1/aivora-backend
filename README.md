@@ -599,5 +599,3 @@ curl -X POST http://localhost:8000/analyze \
 - ✅ Database design (NoSQL, indexing, async drivers)
 - ✅ Software engineering (separation of concerns, error handling, logging)
 - ✅ System design (caching, performance optimization)
-
-Good luck with your interview! 🎉
